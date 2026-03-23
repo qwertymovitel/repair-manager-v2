@@ -5,7 +5,7 @@ services:
     build: .
     container_name: repair-manager-app
     ports:
-      - "5000:5000"
+      - "6000:6000"
     volumes:
       - ./instance:/app/instance
     environment:
