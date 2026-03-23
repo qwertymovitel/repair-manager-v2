@@ -12,6 +12,6 @@ COPY . .
 # Ensure the instance folder exists and has write permissions
 RUN mkdir -p /app/instance && chmod 777 /app/instance
 
-EXPOSE 6000
+EXPOSE 5000
 
 CMD ["python", "app.py"]
