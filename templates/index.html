@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <title>Gestão de Reparos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #cbd5e1; padding: 15px; vertical-align: top; width: 33.33%; }
+        .bg-gray-custom { background-color: #f8fafc; }
+    </style>
+</head>
+<body class="bg-slate-200 p-4 font-sans">
+    <div class="max-w-7xl mx-auto bg-white shadow-2xl rounded-xl overflow-hidden border border-slate-300">
+        
+        <!-- HEADER -->
+        <div class="p-5 bg-slate-900 text-white flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-black italic tracking-tighter leading-none">REPAIR MANAGER</h1>
+                <p class="text-[10px] text-slate-400 font-bold uppercase mt-1">Maputo, Moçambique</p>
+            </div>
+            <div class="flex items-center gap-3">
+                {% if session.get('logged_in') %}
+                    <button onclick="document.getElementById('tech-modal').classList.toggle('hidden')" class="text-[10px] bg-slate-700 px-3 py-1.5 rounded hover:bg-slate-600 uppercase font-bold transition">Técnicos</button>
+                    <span class="text-emerald-400 text-[10px] font-black border-2 border-emerald-400 px-2 py-0.5 rounded uppercase">Admin</span>
+                    <a href="/logout" class="bg-rose-600 px-4 py-1.5 rounded text-[10px] font-black hover:bg-rose-700 transition">SAIR</a>
+                {% else %}
+                    <a href="/login" class="bg-blue-600 px-6 py-2 rounded text-xs font-black uppercase hover:bg-blue-700 transition">Admin Login</a>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- SEARCH BAR (Visible to All) -->
+        <div class="p-4 bg-slate-100 border-b flex justify-between items-center">
+            <form action="/" method="GET" class="flex w-full max-w-md gap-2">
+                <input type="text" name="s" value="{{ search_query }}" placeholder="Pesquisar equipamento ou técnico..." class="flex-1 p-2 text-sm border-2 border-slate-300 rounded-lg outline-none focus:border-blue-500">
+                <button type="submit" class="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold uppercase">🔍</button>
+                {% if search_query %}
+                    <a href="/" class="bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-xs font-bold uppercase flex items-center">Limpar</a>
+                {% endif %}
+            </form>
+            {% if not session.get('logged_in') %}
+                 <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                    <span class="text-[10px] text-slate-400 font-bold uppercase italic">Atualização em tempo real ativa</span>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- ADMIN ADD PANEL -->
+        {% if session.get('logged_in') %}
+        <div class="p-4 border-b bg-slate-50">
+            <form action="/add" method="POST" class="flex gap-2">
+                <input type="text" name="description" placeholder="NOME DO EQUIPAMENTO E MODELO..." class="flex-1 border-2 border-slate-200 p-3 rounded-lg text-sm font-bold focus:border-blue-500 outline-none transition uppercase" required>
+                <select name="tech_id" class="border-2 border-slate-200 p-3 rounded-lg text-xs bg-white font-bold outline-none">
+                    <option value="">Atribuir Técnico (Opcional)</option>
+                    {% for t in techs %}
+                    <option value="{{t.id}}">{{t.name}}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="bg-blue-600 text-white px-8 py-3 rounded-lg font-black hover:bg-blue-700 uppercase text-xs transition">Registar Reparo</button>
+            </form>
+        </div>
+
+        <div id="tech-modal" class="hidden p-4 bg-slate-100 border-b">
+            <h3 class="font-black text-[10px] mb-2 uppercase text-slate-500">Equipa Técnica:</h3>
+            <div class="flex flex-wrap gap-2 mb-4">
+                {% for t in techs %}
+                <span class="bg-white border-2 border-slate-200 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-2">
+                    {{t.name}} <a href="/tech/delete/{{t.id}}" class="text-rose-500 font-black">×</a>
+                </span>
+                {% endfor %}
+            </div>
+            <form action="/tech/manage" method="POST" class="flex gap-2">
+                <input type="text" name="tech_name" placeholder="Nome..." class="border p-2 text-xs rounded-lg w-48 outline-none">
+                <button type="submit" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-[10px] font-black">+ ADICIONAR</button>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- TABLE -->
+        <table class="w-full">
+            <thead>
+                <tr class="bg-slate-100 text-left uppercase text-[11px] font-black text-slate-500 tracking-widest">
+                    <th class="p-5">1. ENTRADA (NOVO)</th>
+                    <th class="p-5">2. PENDENTE (COTAÇÃO)</th>
+                    <th class="p-5">3. FINALIZADO (APROVADO/DEV)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not repairs %}
+                <tr>
+                    <td colspan="3" class="p-10 text-center text-slate-400 italic">Nenhum reparo encontrado com esse termo de pesquisa.</td>
+                </tr>
+                {% endif %}
+                {% for r in repairs %}
+                <tr class="{{ 'bg-gray-custom' if loop.index is even }} border-b border-slate-100">
+                    <td>
+                        <div class="font-black text-slate-800 text-lg leading-tight">{{ r.description }}</div>
+                        <div class="text-[9px] text-slate-400 mt-1 mb-4 font-bold uppercase">Entrada: {{ r.last_updated | format_dt }}</div>
+                        
+                        <div class="mt-2">
+                            {% if session.get('logged_in') %}
+                                <form action="/reassign/{{r.id}}" method="POST" class="flex items-center gap-1 group">
+                                    <div class="relative">
+                                        <select name="tech_id" class="appearance-none border-2 border-slate-300 rounded-md px-3 py-1.5 text-[11px] font-black text-slate-700 pr-8 bg-white group-hover:border-blue-400 outline-none cursor-pointer transition">
+                                            <option value="">(Sem Técnico)</option>
+                                            {% for t in techs %}
+                                            <option value="{{t.id}}" {{ 'selected' if r.technician_id == t.id }}>{{t.name}}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="text-emerald-600 hover:text-emerald-800 font-black text-xl leading-none px-1">✓</button>
+                                </form>
+                            {% else %}
+                                {% if r.technician %}
+                                    <div class="inline-block bg-slate-800 text-white text-[10px] px-3 py-1 rounded font-black uppercase tracking-widest">
+                                        🔧 {{ r.technician.name }}
+                                    </div>
+                                {% endif %}
+                            {% endif %}
+                        </div>
+
+                        {% if session.get('logged_in') %}
+                            <div class="mt-5 pt-4 border-t border-slate-200 flex gap-4 items-center">
+                                {% if r.status == 'NEW' %}
+                                    <a href="/update/{{r.id}}/quote" class="bg-amber-500 text-white text-[10px] px-4 py-2 rounded-md font-black uppercase">Iniciar Cotação</a>
+                                {% endif %}
+                                <a href="/update/{{r.id}}/delete" class="text-[9px] text-slate-300 hover:text-rose-600 uppercase font-black" onclick="return confirm('Eliminar permanentemente?')">Eliminar</a>
+                            </div>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if r.status != 'NEW' %}
+                            <div class="text-[10px] font-black text-amber-600 flex items-center gap-2 uppercase italic">
+                                {% if r.status == 'PENDING' %}
+                                    <span class="w-2 h-2 bg-amber-500 rounded-full animate-ping"></span> Aguardando Decisão
+                                {% else %}
+                                    <span class="text-slate-400">Resposta Recebida</span>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="text-[10px] text-slate-400 mt-1 mb-3 font-bold">
+                                {% if r.status == 'PENDING' %}
+                                    Cotado {{ r.quote_date | time_ago }}
+                                {% else %}
+                                    Decidido em: {{ r.decision_date | format_dt }}
+                                {% endif %}
+                            </div>
+                            
+                            {% if session.get('logged_in') and r.status == 'PENDING' %}
+                                <div class="flex flex-col gap-2 mt-4">
+                                    <a href="/update/{{r.id}}/approve" class="bg-emerald-600 text-white text-center text-[11px] p-2.5 rounded-lg font-black hover:bg-emerald-700 uppercase">Aprovar Reparo</a>
+                                    <a href="/update/{{r.id}}/return" class="bg-rose-600 text-white text-center text-[11px] p-2.5 rounded-lg font-black hover:bg-rose-700 uppercase">Devolver s/ Reparo</a>
+                                </div>
+                            {% endif %}
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if r.status == 'APPROVED' %}
+                            <div class="text-emerald-700 font-black text-2xl italic uppercase tracking-tighter leading-none">✓ APROVADO</div>
+                            <div class="text-[10px] text-slate-400 font-bold mt-1 uppercase">{{ r.decision_date | time_ago }}</div>
+                        {% elif r.status == 'RETURNED' %}
+                            <div class="text-rose-700 font-black text-2xl italic uppercase tracking-tighter leading-none">✕ DEVOLUÇÃO</div>
+                            <div class="text-[10px] text-slate-400 font-bold mt-1 uppercase">{{ r.decision_date | time_ago }}</div>
+                        {% endif %}
+                        
+                        {% if needs_cleanup(r) and session.get('logged_in') %}
+                        <div class="mt-6 p-3 bg-amber-50 border-2 border-amber-200 rounded-lg text-[10px]">
+                            <p class="font-black text-amber-900 mb-2 uppercase italic">⚠️ Alerta +90 Dias</p>
+                            <div class="flex gap-4">
+                                <a href="/update/{{r.id}}/delete" class="text-emerald-700 font-black underline">Remover</a>
+                                <a href="/update/{{r.id}}/deny_removal" class="text-slate-500 font-black underline">Manter +30d</a>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const isAdmin = {{ 'true' if session.get('logged_in') else 'false' }};
+        const isSearching = {{ 'true' if search_query else 'false' }};
+        
+        // Auto refresh only for Guests AND when NOT searching (searching pauses refresh to let you read)
+        if (!isAdmin && !isSearching) {
+            let lastTimestamp = null;
+            async function checkUpdates() {
+                try {
+                    const response = await fetch('/api/last_update');
+                    const data = await response.json();
+                    if (lastTimestamp === null) lastTimestamp = data.timestamp;
+                    else if (data.timestamp > lastTimestamp) window.location.reload();
+                } catch (err) {}
+            }
+            setInterval(checkUpdates, 5000);
+        }
+    </script>
+</body>
+</html>

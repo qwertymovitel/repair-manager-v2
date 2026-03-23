@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  repair-app:
+    build: .
+    container_name: repair-manager-app
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./instance:/app/instance
+    environment:
+      - TZ=Africa/Maputo
+    restart: always
