@@ -1,12 +1,12 @@
-import os
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+import os, base64
+from flask import Flask, request, redirect, url_for, session, flash, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 
 # --- SETUP ---
 base_dir = os.path.abspath(os.path.dirname(__file__))
 app = Flask(__name__, static_folder='static')
-app.secret_key = "maputo-repair-system-2024"
+app.secret_key = "maputo-repair-standalone-v2.1"
 
 # Database path
 instance_path = os.path.join(base_dir, 'instance')
@@ -33,7 +33,7 @@ class Repair(db.Model):
     last_updated = db.Column(db.DateTime, default=datetime.now)
     delay_until = db.Column(db.DateTime, nullable=True)
 
-# --- JINJA FILTERS ---
+# --- JINJA FILTERS & HELPERS ---
 @app.template_filter('format_dt')
 def format_dt(value):
     if not value: return ""
@@ -50,14 +50,26 @@ def time_ago(dt):
 
 @app.context_processor
 def utility_processor():
-    def needs_cleanup(repair):
-        if repair.status not in ['APPROVED', 'RETURNED'] or not repair.decision_date: return False
-        over_90 = datetime.now() > (repair.decision_date + timedelta(days=90))
-        not_delayed = repair.delay_until is None or datetime.now() > repair.delay_until
-        return over_90 and not_delayed
-    return dict(needs_cleanup=needs_cleanup)
+    def get_cleanup_info(repair):
+        if repair.status not in ['APPROVED', 'RETURNED'] or not repair.decision_date:
+            return None
+        
+        # Determine target date: either 90 days from decision OR the snooze date
+        target_date = repair.decision_date + timedelta(days=90)
+        if repair.delay_until and repair.delay_until > datetime.now():
+            target_date = repair.delay_until
+            
+        remaining = target_date - datetime.now()
+        days_left = remaining.days
+        
+        return {
+            "days_left": days_left,
+            "is_expired": days_left <= 0,
+            "target_date": target_date
+        }
+    return dict(get_cleanup_info=get_cleanup_info)
 
-# --- HTML TEMPLATE (Embedded) ---
+# --- HTML TEMPLATE ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt">
@@ -79,7 +91,7 @@ HTML_TEMPLATE = """
                     <p class="text-[10px] text-slate-400 font-bold uppercase">Maputo, Moçambique</p>
                 </div>
             </div>
-            <div>
+            <div class="flex items-center gap-3">
                 {% if session.get('logged_in') %}
                     <button onclick="document.getElementById('m').classList.toggle('hidden')" class="text-[10px] bg-slate-700 px-3 py-1.5 rounded font-bold uppercase">Técnicos</button>
                     <a href="/logout" class="bg-rose-600 px-4 py-1.5 rounded text-[10px] font-black uppercase ml-2">Sair</a>
@@ -120,22 +132,26 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
 
-        <!-- TABLE -->
+        <!-- MAIN TABLE -->
         <table class="w-full">
-            <thead class="bg-slate-50 text-[11px] font-black text-slate-500 uppercase"><tr><th class="p-5 text-left">1. NOVO</th><th class="p-5 text-left">2. PENDENTE</th><th class="p-5 text-left">3. FINALIZADO</th></tr></thead>
+            <thead class="bg-slate-50 text-[11px] font-black text-slate-500 uppercase"><tr><th class="p-5 text-left">1. ENTRADA (NOVO)</th><th class="p-5 text-left">2. PENDENTE</th><th class="p-5 text-left">3. FINALIZADO</th></tr></thead>
             <tbody>
                 {% for r in repairs %}
-                <tr class="{{ 'bg-custom' if loop.index is even }}">
+                <tr class="{{ 'bg-custom' if loop.index is even }} border-b border-slate-100">
                     <td>
                         <div class="font-black text-slate-800 text-lg leading-tight">{{ r.description }}</div>
                         <div class="text-[9px] text-slate-400 mt-1 mb-4 font-bold uppercase tracking-widest italic border-b pb-1">Registado em {{ r.last_updated | format_dt }}</div>
                         {% if session.get('logged_in') %}
-                            <form action="/reassign/{{r.id}}" method="POST" class="flex items-center gap-1">
-                                <select name="t_id" class="border rounded px-2 py-1 text-[11px] font-bold bg-white">
-                                    <option value="">(Sem Técnico)</option>
-                                    {% for t in techs %}<option value="{{t.id}}" {{ 'selected' if r.technician_id == t.id }}>{{t.name}}</option>{% endfor %}
-                                </select>
-                                <button type="submit" class="text-emerald-600 font-black text-xl">✓</button>
+                            <form action="/reassign/{{r.id}}" method="POST" class="flex items-center gap-1 group">
+                                <div class="relative">
+                                    <select name="t_id" class="appearance-none border-2 border-slate-300 rounded-md px-3 py-1.5 text-[11px] font-black text-slate-700 pr-8 bg-white group-hover:border-blue-400 outline-none cursor-pointer transition">
+                                        <option value="">(Sem Técnico)</option>
+                                        {% for t in techs %}
+                                        <option value="{{t.id}}" {{ 'selected' if r.technician_id == t.id }}>{{t.name}}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <button type="submit" class="text-emerald-600 hover:text-emerald-800 font-black text-xl leading-none px-1">✓</button>
                             </form>
                             <div class="mt-4 flex gap-4 items-center">
                                 {% if r.status == 'NEW' %}<a href="/update/{{r.id}}/quote" class="bg-amber-500 text-white text-[10px] px-3 py-1.5 rounded font-black uppercase">Enviar p/ Cotação</a>{% endif %}
@@ -145,17 +161,47 @@ HTML_TEMPLATE = """
                     </td>
                     <td>
                         {% if r.status != 'NEW' %}
-                            <div class="text-[10px] font-black text-amber-600 uppercase italic">{% if r.status == 'PENDING' %}<span class="animate-pulse">●</span> Aguardando Decisão{% else %}Resposta Recebida{% endif %}</div>
-                            <div class="text-[10px] text-slate-400 font-bold uppercase mt-1">{% if r.status == 'PENDING' %}Cotado {{ r.quote_date | time_ago }}{% else %}Decidido em {{ r.decision_date | format_dt }}{% endif %}</div>
+                            <div class="text-[10px] font-black text-amber-600 flex items-center gap-2 uppercase italic">
+                                {% if r.status == 'PENDING' %}<span class="w-2 h-2 bg-amber-500 rounded-full animate-ping"></span> Aguardando Decisão{% else %}<span class="text-slate-400">Resposta Recebida</span>{% endif %}
+                            </div>
+                            <div class="text-[10px] text-slate-400 mt-1 mb-3 font-bold uppercase">
+                                {% if r.status == 'PENDING' %}Cotado {{ r.quote_date | time_ago }}{% else %}Decidido em: {{ r.decision_date | format_dt }}{% endif %}
+                            </div>
                             {% if session.get('logged_in') and r.status == 'PENDING' %}
-                                <div class="flex flex-col gap-2 mt-4"><a href="/update/{{r.id}}/approve" class="bg-emerald-600 text-white text-center text-[11px] p-2 rounded-lg font-black uppercase">Aprovar</a><a href="/update/{{r.id}}/return" class="bg-rose-600 text-white text-center text-[11px] p-2 rounded-lg font-black uppercase">Devolução</a></div>
+                                <div class="flex flex-col gap-2 mt-4">
+                                    <a href="/update/{{r.id}}/approve" class="bg-emerald-600 text-white text-center text-[11px] p-2.5 rounded-lg font-black hover:bg-emerald-700 uppercase">Aprovar Reparo</a>
+                                    <a href="/update/{{r.id}}/return" class="bg-rose-600 text-white text-center text-[11px] p-2.5 rounded-lg font-black hover:bg-rose-700 uppercase">Devolver s/ Reparo</a>
+                                </div>
                             {% endif %}
                         {% endif %}
                     </td>
                     <td>
-                        {% if r.status == 'APPROVED' %}<div class="text-emerald-700 font-black text-2xl italic uppercase">✓ APROVADO</div><div class="text-[10px] text-slate-400 font-bold uppercase">Em {{ r.decision_date | format_dt }}</div>
-                        {% elif r.status == 'RETURNED' %}<div class="text-rose-700 font-black text-2xl italic uppercase">✕ DEVOLUÇÃO</div><div class="text-[10px] text-slate-400 font-bold uppercase">Em {{ r.decision_date | format_dt }}</div>{% endif %}
-                        {% if needs_cleanup(r) and session.get('logged_in') %}<div class="mt-4 p-2 bg-amber-50 border-2 border-amber-200 rounded text-[9px] font-black text-amber-900 uppercase italic tracking-tighter shadow-sm">⚠️ ALERTA +90 DIAS<br><div class="mt-2 flex gap-2"><a href="/update/{{r.id}}/delete" class="bg-emerald-700 text-white px-2 py-0.5 rounded">Remover</a> <a href="/update/{{r.id}}/deny_removal" class="bg-slate-500 text-white px-2 py-0.5 rounded">Manter +30d</a></div></div>{% endif %}
+                        {% if r.status == 'APPROVED' %}
+                            <div class="text-emerald-700 font-black text-2xl italic uppercase leading-none">✓ APROVADO</div>
+                        {% elif r.status == 'RETURNED' %}
+                            <div class="text-rose-700 font-black text-2xl italic uppercase leading-none">✕ DEVOLUÇÃO</div>
+                        {% endif %}
+
+                        {% set cleanup = get_cleanup_info(r) %}
+                        {% if cleanup %}
+                            <div class="text-[10px] text-slate-400 font-bold mt-1 uppercase">Em {{ r.decision_date | format_dt }}</div>
+                            
+                            <!-- COUNTDOWN DISPLAY -->
+                            <div class="mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold uppercase {{ 'bg-red-100 text-red-700' if cleanup.is_expired else 'bg-blue-50 text-blue-600' }}">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                {% if cleanup.is_expired %} EXPIROU {% else %} Expira em: {{ cleanup.days_left }} dias {% endif %}
+                            </div>
+
+                            {% if cleanup.is_expired and session.get('logged_in') %}
+                            <div class="mt-4 p-3 bg-amber-50 border-2 border-amber-200 rounded-lg text-[10px]">
+                                <p class="font-black text-amber-900 mb-2 uppercase italic">⚠️ ALERTA DE ARQUIVO (EXPIRADO)</p>
+                                <div class="flex gap-4">
+                                    <a href="/update/{{r.id}}/delete" class="text-emerald-700 font-black underline">Eliminar Agora</a>
+                                    <a href="/update/{{r.id}}/deny_removal" class="text-slate-500 font-black underline">Manter +30 Dias</a>
+                                </div>
+                            </div>
+                            {% endif %}
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -167,7 +213,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- ROUTES CONT. ---
+# --- ROUTES ---
 @app.route('/')
 def index():
     s = request.args.get('s', '').strip()
